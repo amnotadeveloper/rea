@@ -1,0 +1,175 @@
+---
+  - name: Provision an EC2 Instance
+    hosts: local
+    connection: local
+    gather_facts: False
+    tags: provisioning
+    # Variables required for provisioning EC2 Instance
+    vars:
+      instance_type: t2.micro
+      security_group: sinatra-webserver # Change the security group name here
+      image: ami-02fd0b06f06d93dfc # This is an AMI i created myself
+      keypair: sinatra # This is one of my keys that i already have in AWS
+      region: ap-southeast-2 # Change the Region
+      count: 1
+
+    # Task that will be used to Launch/Create an EC2 Instance
+    tasks:
+
+      - name: Create a security group
+        local_action: 
+          module: ec2_group
+          name: "{{ security_group }}"
+          description: Security Group for webserver Servers
+          region: "{{ region }}"
+          rules:
+            - proto: tcp
+              from_port: 999 
+              to_port: 999
+              cidr_ip: 0.0.0.0/0
+            - proto: tcp
+              from_port: 80
+              to_port: 80
+              cidr_ip: 0.0.0.0/0
+            - proto: tcp
+              from_port: 22
+              to_port: 22
+              cidr_ip: 0.0.0.0/0
+          rules_egress:
+            - proto: all
+              cidr_ip: 0.0.0.0/0
+        register: basic_firewall
+
+      - name: Launch the new EC2 Instance
+        local_action: ec2 
+                      group={{ security_group }} 
+                      instance_type={{ instance_type}} 
+                      image={{ image }} 
+                      wait=true 
+                      region={{ region }} 
+                      keypair={{ keypair }}
+                      count={{count}}
+        register: ec2
+
+      - name: "REFRESH THE ANSIBLE INVENTORY."  
+        meta: refresh_inventory
+
+      - name: Add the newly created EC2 instance(s) to the local host group (located inside the directory)
+        local_action: lineinfile
+                      dest="./hosts"
+                      regexp={{ item.public_ip }}
+                      insertafter="[webserver]" line={{ item.public_ip }}
+        with_items: '{{ec2.instances}}'    
+
+      - name: Wait for SSH to come up
+        local_action: wait_for 
+                      host={{ item.public_ip }} 
+                      port=22
+                      state=started
+        with_items: '{{ec2.instances}}'
+
+      - name: Add tag to Instance(s)
+        local_action: ec2_tag resource={{ item.id }} region={{ region }} state=present
+        with_items: '{{ec2.instances}}'
+        args:
+          tags:
+            Name: webserver
+    
+      - name: "REFRESH THE ANSIBLE INVENTORY."
+        meta: refresh_inventory
+
+  - name: Configure instance(s)
+    hosts: webserver
+    become: True
+    gather_facts: True
+ 
+    tasks:
+      
+      - name: "REFRESH THE ANSIBLE INVENTORY."
+        meta: refresh_inventory
+
+      - name: Install git
+        become: yes
+        become_method: sudo
+        yum: name=git,nginx state=present
+
+      - name: Gem
+        command: gem install "rubygems-update:<3.0.0" --no-document
+
+      - name: Bundler
+        command: gem install bundler -v '1.17.3'
+
+      - git:
+           repo: https://github.com/rea-cruitment/simple-sinatra-app.git
+           dest: /home/ec2-user/sinatra/
+    
+      - name: Fix permissions
+        become: yes
+        become_method: sudo
+        file: dest=/home/ec2-user/sinatra owner=ec2-user group=ec2-user recurse=yes
+
+      - name: Compile and run
+        command: /usr/local/bin/bundle install
+        args:
+            chdir: /home/ec2-user/sinatra
+
+      - name: Compile and run
+        command: /usr/local/bin/rackup -p 9292 -D
+        args:
+            chdir: /home/ec2-user/sinatra
+        become: yes
+      
+      - name: config from nginx
+        lineinfile:
+          dest: /etc/nginx/nginx.conf
+          regexp: "listen"                  
+          state: absent
+
+      - name: create file
+        file:
+          path: /etc/nginx/conf.d/virtual.conf
+          state: touch
+        become: yes
+
+      - name: Fill up this file /etc/nginx/conf.d/virtual.conf
+        blockinfile:
+          path: /etc/nginx/conf.d/virtual.conf
+          block: |
+           server {
+           listen       80 default_server;
+           listen       [::]:80 default_server;
+           server_name  localhost;
+
+           include /etc/nginx/default.d/*.conf;
+
+           location / {
+           proxy_pass http://127.0.0.1:9292;
+                     }
+             }
+        become: yes
+
+      - name: Start the rackup app on restart
+        blockinfile:
+          path: /etc/rc.local
+          block: |
+           cd /home/ec2-user/sinatra; /usr/local/bin/rackup -p 9292 -D > /tmp/foo 2>&1
+        become: yes
+
+      - name: nginx start
+        service:
+            name: nginx
+            state: restarted
+            enabled: yes
+
+      - name: Change ssh port
+        lineinfile: 
+          dest: /etc/ssh/sshd_config
+          regexp: "^#Port 22"
+          insertafter: '^#Port '
+          line: 'Port 999'
+        become: yes
+
+      - name: Restart sshd
+        service:
+            name: sshd
+            state: restarted
