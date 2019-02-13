@@ -1,17 +1,17 @@
 ---
   - name: Provision an EC2 Instance
-    hosts: local
-    connection: local
-    gather_facts: False
-    tags: provisioning
+    hosts: local  #Required for using credentials for AWS stored in ~/.boto
+    connection: local #Required for using credentials for AWS stored in ~/.boto
+    gather_facts: False #Not Required
+    tags: Sinatra-WebServer
     # Variables required for provisioning EC2 Instance
     vars:
-      instance_type: t2.micro
-      security_group: sinatra-webserver # Change the security group name here
-      image: ami-02fd0b06f06d93dfc # This is an AMI i created myself
-      keypair: sinatra # This is one of my keys that i already have in AWS
-      region: ap-southeast-2 # Change the Region
-      count: 1
+      instance_type: t2.micro #Instance Type in AWS
+      security_group: sinatra-webserver #Create your Security Group here
+      image: ami-02fd0b06f06d93dfc # Amazon Linux AMI 2018.03.0 (HVM), SSD Volume Type - ami-02fd0b06f06d93dfc
+      keypair: sinatra # This is one of my keys that i already have in AWS. Please generate and download a key
+      region: ap-southeast-2 # Change the Region. Sydney here
+      count: 1 #Only 1 instance
 
     # Task that will be used to Launch/Create an EC2 Instance
     tasks:
