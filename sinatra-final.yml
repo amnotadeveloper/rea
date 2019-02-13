@@ -13,10 +13,10 @@
       region: ap-southeast-2 # Change the Region. Sydney here
       count: 1 #Only 1 instance
 
-    # Task that will be used to Launch/Create an EC2 Instance
+    # Task that will be used to Laun EC2 Instance and configure Security Groups with installation of required packages.
     tasks:
 
-      - name: Create a security group
+      - name: Create a security group  #Creating a Security Group with inbound ports 999, 80 and 22.
         local_action: 
           module: ec2_group
           name: "{{ security_group }}"
@@ -40,7 +40,7 @@
               cidr_ip: 0.0.0.0/0
         register: basic_firewall
 
-      - name: Launch the new EC2 Instance
+      - name: Launch the new EC2 Instance  #Creating an EC2 instance with the type and parameters given on top in the playbook.
         local_action: ec2 
                       group={{ security_group }} 
                       instance_type={{ instance_type}} 
@@ -51,87 +51,87 @@
                       count={{count}}
         register: ec2
 
-      - name: "REFRESH THE ANSIBLE INVENTORY."  
+      - name: "REFRESH THE ANSIBLE INVENTORY."  #Refresh the inventory cache to include the freshly included EC2 IP(Next step)
         meta: refresh_inventory
 
-      - name: Add the newly created EC2 instance(s) to the local host group (located inside the directory)
+      - name: Add the newly created EC2 instance(s) to the local host group (located inside the directory) #Add the new IP under Webserver
         local_action: lineinfile
                       dest="./hosts"
                       regexp={{ item.public_ip }}
                       insertafter="[webserver]" line={{ item.public_ip }}
         with_items: '{{ec2.instances}}'    
 
-      - name: Wait for SSH to come up
+      - name: Wait for SSH to come up #Waiting for SSH to come up to start internal operations and package installations
         local_action: wait_for 
                       host={{ item.public_ip }} 
                       port=22
                       state=started
         with_items: '{{ec2.instances}}'
 
-      - name: Add tag to Instance(s)
+      - name: Add tag to Instance(s) #Add a tag for identification in AWS Portal
         local_action: ec2_tag resource={{ item.id }} region={{ region }} state=present
         with_items: '{{ec2.instances}}'
         args:
           tags:
             Name: webserver
     
-      - name: "REFRESH THE ANSIBLE INVENTORY."
+      - name: "REFRESH THE ANSIBLE INVENTORY." #Refresh the inventory again to include the IP while the playbook is running
         meta: refresh_inventory
 
-  - name: Configure instance(s)
+  - name: Configure instance(s) #Now logging into the Instance to set everything up
     hosts: webserver
     become: True
     gather_facts: True
  
     tasks:
       
-      - name: "REFRESH THE ANSIBLE INVENTORY."
+      - name: "REFRESH THE ANSIBLE INVENTORY." #Refreshing the inventory again
         meta: refresh_inventory
 
-      - name: Install git
+      - name: Install git and nginx #Installing git and nginx 
         become: yes
         become_method: sudo
         yum: name=git,nginx state=present
 
-      - name: Gem
+      - name: Gem #install Gems
         command: gem install "rubygems-update:<3.0.0" --no-document
 
-      - name: Bundler
+      - name: Bundler #install bundler
         command: gem install bundler -v '1.17.3'
 
-      - git:
+      - git:  #Grabbing the app
            repo: https://github.com/rea-cruitment/simple-sinatra-app.git
            dest: /home/ec2-user/sinatra/
     
-      - name: Fix permissions
+      - name: Fix permissions #Fix permissions, good manners :)
         become: yes
         become_method: sudo
         file: dest=/home/ec2-user/sinatra owner=ec2-user group=ec2-user recurse=yes
 
-      - name: Compile and run
+      - name: Compile #Compiling our application
         command: /usr/local/bin/bundle install
         args:
             chdir: /home/ec2-user/sinatra
 
-      - name: Compile and run
+      - name: Running the app #Running the compiled app on port 9292 in daemon mode
         command: /usr/local/bin/rackup -p 9292 -D
         args:
             chdir: /home/ec2-user/sinatra
         become: yes
       
-      - name: config from nginx
+      - name: config from nginx #Remove listen line from nginx
         lineinfile:
           dest: /etc/nginx/nginx.conf
           regexp: "listen"                  
           state: absent
 
-      - name: create file
+      - name: create file #Create this file to onfigure nginx
         file:
           path: /etc/nginx/conf.d/virtual.conf
           state: touch
         become: yes
 
-      - name: Fill up this file /etc/nginx/conf.d/virtual.conf
+      - name: /etc/nginx/conf.d/virtual.conf #Including all the required configuration for reverse proxy
         blockinfile:
           path: /etc/nginx/conf.d/virtual.conf
           block: |
@@ -148,20 +148,20 @@
              }
         become: yes
 
-      - name: Start the rackup app on restart
+      - name: Start the rackup app on restart #Include in rc.local for restarts and redirecting for any errors
         blockinfile:
           path: /etc/rc.local
           block: |
-           cd /home/ec2-user/sinatra; /usr/local/bin/rackup -p 9292 -D > /tmp/foo 2>&1
+           cd /home/ec2-user/sinatra; /usr/local/bin/rackup -p 9292 -D > /tmp/rackup 2>&1
         become: yes
 
-      - name: nginx start
+      - name: nginx start #Starting the nginx server on port 80
         service:
             name: nginx
             state: restarted
             enabled: yes
 
-      - name: Change ssh port
+      - name: Change ssh port #For security, change ssh port to 999
         lineinfile: 
           dest: /etc/ssh/sshd_config
           regexp: "^#Port 22"
@@ -169,7 +169,7 @@
           line: 'Port 999'
         become: yes
 
-      - name: Restart sshd
+      - name: Restart sshd #Restart sshd after configuring port
         service:
             name: sshd
             state: restarted
